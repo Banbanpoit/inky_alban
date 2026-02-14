@@ -1,0 +1,89 @@
+<div class="form-group">
+    <label for="gpxUpload" class="form-input file-upload-label">Choose GPX File</label>
+    <input
+        type="file"
+        id="gpxUpload"
+        name="gpxFile"
+        accept=".gpx,application/gpx+xml,text/xml,application/xml"
+        class="file-upload-input"
+        onchange="setGpxFile()"
+    >
+</div>
+
+<div class="form-group">
+    <div id="fileNames" class="file-name-list"></div>
+</div>
+
+<div id="hiddenFileInputs"></div>
+
+<div class="form-group">
+    <span style="color: var(--text-primary);">
+        Upload one GPX file. Each &lt;trk&gt; entry is displayed as one activity, ordered by latest start time.
+    </span>
+</div>
+
+<script>
+    function clearDisplayedFile() {
+        const fileNamesDisplay = document.getElementById("fileNames");
+        const hiddenFileInputs = document.getElementById("hiddenFileInputs");
+        fileNamesDisplay.innerHTML = '';
+        hiddenFileInputs.innerHTML = '';
+    }
+
+    function setDisplayedFile(fileName, sourceType, filePath = '') {
+        const fileNamesDisplay = document.getElementById("fileNames");
+
+        const fileElement = document.createElement("div");
+        fileElement.classList.add("file-name");
+        fileElement.id = `gpx-${sourceType}-${fileName}`;
+        fileElement.innerHTML = `
+            <span id="fileNameText">${fileName}</span>
+            <button type="button" class="remove-btn" onclick="removeGpxFile()">X</button>
+        `;
+        fileNamesDisplay.appendChild(fileElement);
+
+        if (filePath) {
+            const hiddenInput = document.createElement("input");
+            hiddenInput.type = "hidden";
+            hiddenInput.name = "gpxFile";
+            hiddenInput.value = filePath;
+            hiddenInput.id = "hidden-gpx-file";
+            hiddenInput.setAttribute('delete-on-submit', '');
+            document.getElementById("hiddenFileInputs").appendChild(hiddenInput);
+        }
+    }
+
+    function setGpxFile() {
+        const fileInput = document.getElementById("gpxUpload");
+        const file = fileInput.files[0];
+        if (!file) {
+            return;
+        }
+
+        clearDisplayedFile();
+        setDisplayedFile(file.name, 'new');
+
+        uploadedFiles["gpxFile"] = [file];
+        fileInput.value = "";
+    }
+
+    function removeGpxFile() {
+        clearDisplayedFile();
+        uploadedFiles["gpxFile"] = [];
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!loadPluginSettings) {
+            return;
+        }
+
+        const existingPath = pluginSettings.gpxFile;
+        if (!existingPath) {
+            return;
+        }
+
+        const existingFileName = existingPath.split('/').pop();
+        clearDisplayedFile();
+        setDisplayedFile(existingFileName, 'existing', existingPath);
+    });
+</script>

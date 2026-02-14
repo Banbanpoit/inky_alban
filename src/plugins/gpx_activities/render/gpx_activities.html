@@ -1,0 +1,79 @@
+<html>
+<head>
+    {% for style in style_sheets %}
+    <link rel="stylesheet" href="{{ style }}">
+    {% endfor %}
+
+    <style>
+        {% for font in font_faces %}
+        @font-face {
+            font-family: "{{font.font_family}}";
+            font-weight: {{font.font_weight}};
+            font-style: {{font.font_style}};
+            src: url({{font.url}}) format("truetype");
+        }
+        {% endfor %}
+    </style>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+</head>
+<body>
+    <div class="layout">
+        <section class="map-panel">
+            <div id="map"></div>
+        </section>
+
+        <aside class="activities-panel">
+            <h1>Latest Activities</h1>
+            <ul>
+                {% for activity in activities %}
+                <li>
+                    <div class="activity-title">{{ activity.title }}</div>
+                    <div class="activity-meta">{{ activity.start }}</div>
+                    <div class="activity-meta">{{ activity.distance }} | {{ activity.point_count }} pts</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </aside>
+    </div>
+
+    <script>
+        const mapSegments = {{ map_segments | tojson }};
+        const bounds = {{ bounds | tojson }};
+
+        const map = L.map('map', {
+            zoomControl: false,
+            attributionControl: false,
+            preferCanvas: true
+        });
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+        }).addTo(map);
+
+        mapSegments.forEach(segment => {
+            if (segment.length > 1) {
+                L.polyline(segment, {
+                    color: '#111111',
+                    weight: 4,
+                    opacity: 0.95,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                }).addTo(map);
+            }
+        });
+
+        const leafletBounds = L.latLngBounds(
+            [bounds.south, bounds.west],
+            [bounds.north, bounds.east]
+        );
+
+        if (leafletBounds.isValid()) {
+            map.fitBounds(leafletBounds.pad(0.1));
+        } else {
+            map.setView([0, 0], 2);
+        }
+    </script>
+</body>
+</html>
