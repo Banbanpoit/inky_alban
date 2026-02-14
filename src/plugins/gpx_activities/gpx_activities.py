@@ -20,7 +20,7 @@ class Activity:
     title: str
     start_dt: datetime | None
     distance_km: float
-    point_count: int
+    duration_seconds: int | None
     segments: list[list[list[float]]]
 
 
@@ -72,8 +72,8 @@ def parse_gpx_activities(gpx_file: str) -> list[Activity]:
 
         segments: list[list[list[float]]] = []
         first_point_time: datetime | None = None
+        last_point_time: datetime | None = None
         total_distance_km = 0.0
-        total_points = 0
 
         for trkseg in trk.findall("gpx:trkseg", GPX_NS):
             segment_points: list[list[float]] = []
@@ -89,14 +89,17 @@ def parse_gpx_activities(gpx_file: str) -> list[Activity]:
                 lat = float(lat_attr)
                 lon = float(lon_attr)
                 segment_points.append([lat, lon])
-                total_points += 1
 
                 if prev_lat is not None and prev_lon is not None:
                     total_distance_km += haversine_distance_km(prev_lat, prev_lon, lat, lon)
                 prev_lat, prev_lon = lat, lon
 
-                if first_point_time is None:
-                    first_point_time = parse_iso_datetime(trkpt.findtext("gpx:time", namespaces=GPX_NS))
+                track_point_time = parse_iso_datetime(trkpt.findtext("gpx:time", namespaces=GPX_NS))
+                if track_point_time:
+                    if first_point_time is None or track_point_time < first_point_time:
+                        first_point_time = track_point_time
+                    if last_point_time is None or track_point_time > last_point_time:
+                        last_point_time = track_point_time
 
             if segment_points:
                 segments.append(segment_points)
@@ -105,12 +108,16 @@ def parse_gpx_activities(gpx_file: str) -> list[Activity]:
             continue
 
         start_dt = trk_time or first_point_time
+        duration_seconds = None
+        if first_point_time and last_point_time and last_point_time >= first_point_time:
+            duration_seconds = int((last_point_time - first_point_time).total_seconds())
+
         activities.append(
             Activity(
                 title=title,
                 start_dt=start_dt,
                 distance_km=total_distance_km,
-                point_count=total_points,
+                duration_seconds=duration_seconds,
                 segments=segments,
             )
         )
@@ -121,6 +128,15 @@ def parse_gpx_activities(gpx_file: str) -> list[Activity]:
         return activity.start_dt.timestamp()
 
     activities.sort(key=sort_key, reverse=True)
+    return activities
+
+
+def parse_multiple_gpx_activities(gpx_files: list[str]) -> list[Activity]:
+    activities: list[Activity] = []
+    for gpx_file in gpx_files:
+        activities.extend(parse_gpx_activities(gpx_file))
+
+    activities.sort(key=lambda activity: activity.start_dt.timestamp() if activity.start_dt else float("-inf"), reverse=True)
     return activities
 
 
@@ -155,20 +171,21 @@ def random_trace_color() -> str:
 
 class GpxActivities(BasePlugin):
     def generate_image(self, settings, device_config):
-        gpx_file = settings.get("gpxFile")
-        if not gpx_file:
-            raise RuntimeError("GPX file is required.")
+        gpx_files = self._normalize_gpx_files(settings)
+        if not gpx_files:
+            raise RuntimeError("At least one GPX file is required.")
 
-        if not os.path.isfile(gpx_file):
-            raise RuntimeError("Configured GPX file is missing.")
+        for gpx_file in gpx_files:
+            if not os.path.isfile(gpx_file):
+                raise RuntimeError(f"Configured GPX file is missing: {os.path.basename(gpx_file)}")
 
         dimensions = device_config.get_resolution()
         if device_config.get_config("orientation") == "vertical":
             dimensions = dimensions[::-1]
 
-        activities = parse_gpx_activities(gpx_file)
+        activities = parse_multiple_gpx_activities(gpx_files)
         if not activities:
-            raise RuntimeError("No valid tracks found in GPX file.")
+            raise RuntimeError("No valid tracks found in GPX files.")
 
         map_segments: list[list[list[float]]] = []
         map_traces: list[dict] = []
@@ -188,7 +205,7 @@ class GpxActivities(BasePlugin):
                     "title": activity.title,
                     "start": self._format_activity_start(activity.start_dt),
                     "distance": f"{activity.distance_km:.1f} km",
-                    "point_count": activity.point_count,
+                    "duration": self._format_duration(activity.duration_seconds),
                     "color": color,
                 }
             )
@@ -230,13 +247,13 @@ class GpxActivities(BasePlugin):
         return image
 
     def cleanup(self, settings):
-        gpx_file = settings.get("gpxFile")
-        if gpx_file and os.path.exists(gpx_file):
-            try:
-                os.remove(gpx_file)
-                logger.info("Deleted GPX file: %s", gpx_file)
-            except Exception as exc:
-                logger.warning("Failed to delete GPX file %s: %s", gpx_file, exc)
+        for gpx_file in self._normalize_gpx_files(settings):
+            if gpx_file and os.path.exists(gpx_file):
+                try:
+                    os.remove(gpx_file)
+                    logger.info("Deleted GPX file: %s", gpx_file)
+                except Exception as exc:
+                    logger.warning("Failed to delete GPX file %s: %s", gpx_file, exc)
 
     @staticmethod
     def _format_activity_start(start_dt: datetime | None) -> str:
@@ -245,3 +262,37 @@ class GpxActivities(BasePlugin):
 
         local_dt = start_dt.astimezone()
         return local_dt.strftime("%Y-%m-%d %H:%M")
+
+    @staticmethod
+    def _format_duration(duration_seconds: int | None) -> str:
+        if duration_seconds is None:
+            return "Unknown duration"
+
+        if duration_seconds < 60:
+            return f"{duration_seconds}s"
+
+        hours, remainder = divmod(duration_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours > 0:
+            if seconds > 0:
+                return f"{hours}h {minutes:02d}m {seconds:02d}s"
+            return f"{hours}h {minutes:02d}m"
+
+        if seconds > 0:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{minutes}m"
+
+    @staticmethod
+    def _normalize_gpx_files(settings) -> list[str]:
+        # Preferred key for multi-upload mode.
+        value = settings.get("gpxFiles[]")
+        if value is None:
+            # Backward compatibility with old single-file setting.
+            value = settings.get("gpxFile")
+
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [path for path in value if path]
+        return [value] if value else []

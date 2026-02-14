@@ -1,12 +1,13 @@
 <div class="form-group">
-    <label for="gpxUpload" class="form-input file-upload-label">Choose GPX File</label>
+    <label for="gpxUpload" class="form-input file-upload-label">Choose GPX File(s)</label>
     <input
         type="file"
         id="gpxUpload"
-        name="gpxFile"
+        name="gpxFiles[]"
         accept=".gpx,application/gpx+xml,text/xml,application/xml"
         class="file-upload-input"
-        onchange="setGpxFile()"
+        multiple
+        onchange="addGpxFiles()"
     >
 </div>
 
@@ -18,72 +19,104 @@
 
 <div class="form-group">
     <span style="color: var(--text-primary);">
-        Upload one GPX file. Each &lt;trk&gt; entry is displayed as one activity, ordered by latest start time.
+        Upload one or more GPX files. Each &lt;trk&gt; entry is displayed as one activity, ordered by latest start time.
     </span>
 </div>
 
 <script>
-    function clearDisplayedFile() {
-        const fileNamesDisplay = document.getElementById("fileNames");
-        const hiddenFileInputs = document.getElementById("hiddenFileInputs");
-        fileNamesDisplay.innerHTML = '';
-        hiddenFileInputs.innerHTML = '';
+    function ensureBucket() {
+        if (!uploadedFiles["gpxFiles[]"]) {
+            uploadedFiles["gpxFiles[]"] = [];
+        }
     }
 
-    function setDisplayedFile(fileName, sourceType, filePath = '') {
+    function addDisplayedFile(fileName, key, filePath = "") {
         const fileNamesDisplay = document.getElementById("fileNames");
 
         const fileElement = document.createElement("div");
         fileElement.classList.add("file-name");
-        fileElement.id = `gpx-${sourceType}-${fileName}`;
+        fileElement.id = `gpx-${key}`;
         fileElement.innerHTML = `
             <span id="fileNameText">${fileName}</span>
-            <button type="button" class="remove-btn" onclick="removeGpxFile()">X</button>
+            <button type="button" class="remove-btn" onclick="removeGpxFile('${key}')">X</button>
         `;
         fileNamesDisplay.appendChild(fileElement);
 
         if (filePath) {
             const hiddenInput = document.createElement("input");
             hiddenInput.type = "hidden";
-            hiddenInput.name = "gpxFile";
+            hiddenInput.name = "gpxFiles[]";
             hiddenInput.value = filePath;
-            hiddenInput.id = "hidden-gpx-file";
+            hiddenInput.id = `hidden-gpx-${key}`;
             hiddenInput.setAttribute('delete-on-submit', '');
             document.getElementById("hiddenFileInputs").appendChild(hiddenInput);
         }
     }
 
-    function setGpxFile() {
+    function addGpxFiles() {
+        ensureBucket();
         const fileInput = document.getElementById("gpxUpload");
-        const file = fileInput.files[0];
-        if (!file) {
+        const files = Array.from(fileInput.files);
+        if (files.length === 0) {
             return;
         }
 
-        clearDisplayedFile();
-        setDisplayedFile(file.name, 'new');
+        files.forEach(file => {
+            const key = `new-${file.name}-${file.lastModified}-${file.size}`;
+            const existing = uploadedFiles["gpxFiles[]"].some(
+                existingFile =>
+                    existingFile.name === file.name &&
+                    existingFile.lastModified === file.lastModified &&
+                    existingFile.size === file.size
+            );
+            if (existing) {
+                return;
+            }
 
-        uploadedFiles["gpxFile"] = [file];
+            uploadedFiles["gpxFiles[]"].push(file);
+            addDisplayedFile(file.name, key);
+        });
         fileInput.value = "";
     }
 
-    function removeGpxFile() {
-        clearDisplayedFile();
-        uploadedFiles["gpxFile"] = [];
+    function removeGpxFile(key) {
+        ensureBucket();
+        const fileElement = document.getElementById(`gpx-${key}`);
+        if (fileElement) {
+            fileElement.remove();
+        }
+
+        const hiddenInput = document.getElementById(`hidden-gpx-${key}`);
+        if (hiddenInput) {
+            hiddenInput.remove();
+        }
+
+        if (key.startsWith("new-")) {
+            const parts = key.split("-");
+            const size = Number(parts.pop());
+            const lastModified = Number(parts.pop());
+            const fileName = parts.slice(1).join("-");
+
+            uploadedFiles["gpxFiles[]"] = uploadedFiles["gpxFiles[]"].filter(
+                file =>
+                    !(file.name === fileName && file.lastModified === lastModified && file.size === size)
+            );
+        }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        ensureBucket();
         if (!loadPluginSettings) {
             return;
         }
 
-        const existingPath = pluginSettings.gpxFile;
-        if (!existingPath) {
-            return;
-        }
+        const existingPaths = pluginSettings["gpxFiles[]"] ||
+            (pluginSettings.gpxFile ? [pluginSettings.gpxFile] : []);
 
-        const existingFileName = existingPath.split('/').pop();
-        clearDisplayedFile();
-        setDisplayedFile(existingFileName, 'existing', existingPath);
+        existingPaths.forEach((existingPath, index) => {
+            const existingFileName = existingPath.split('/').pop();
+            const key = `existing-${index}`;
+            addDisplayedFile(existingFileName, key, existingPath);
+        });
     });
 </script>

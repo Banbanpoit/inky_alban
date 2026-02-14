@@ -1,4 +1,4 @@
-from src.plugins.gpx_activities.gpx_activities import parse_gpx_activities
+from src.plugins.gpx_activities.gpx_activities import parse_gpx_activities, parse_multiple_gpx_activities
 
 
 def test_parse_gpx_activities_sorted_latest_first(tmp_path):
@@ -56,3 +56,41 @@ def test_parse_gpx_activities_uses_first_point_time_when_track_time_missing(tmp_
     assert len(activities) == 1
     assert activities[0].start_dt is not None
     assert activities[0].start_dt.isoformat() == "2026-02-01T07:30:00+00:00"
+
+
+def test_parse_multiple_gpx_activities_merged_and_sorted(tmp_path):
+    gpx_early = """<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>First File Run</name>
+    <time>2026-01-10T08:00:00Z</time>
+    <trkseg>
+      <trkpt lat="41.0" lon="-73.0"/>
+      <trkpt lat="41.001" lon="-73.001"/>
+    </trkseg>
+  </trk>
+</gpx>
+"""
+    gpx_late = """<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Second File Ride</name>
+    <time>2026-01-11T08:00:00Z</time>
+    <trkseg>
+      <trkpt lat="42.0" lon="-72.0"/>
+      <trkpt lat="42.001" lon="-72.001"/>
+    </trkseg>
+  </trk>
+</gpx>
+"""
+
+    file_early = tmp_path / "early.gpx"
+    file_late = tmp_path / "late.gpx"
+    file_early.write_text(gpx_early)
+    file_late.write_text(gpx_late)
+
+    activities = parse_multiple_gpx_activities([str(file_early), str(file_late)])
+
+    assert len(activities) == 2
+    assert activities[0].title == "Second File Ride"
+    assert activities[1].title == "First File Run"
