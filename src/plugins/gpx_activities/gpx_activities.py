@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import asin, cos, radians, sin, sqrt
-from pathlib import Path
 import logging
 import os
+import random
 import xml.etree.ElementTree as ET
 
 from plugins.base_plugin.base_plugin import BasePlugin
@@ -27,7 +27,6 @@ class Activity:
 GPX_NS = {
     "gpx": "http://www.topografix.com/GPX/1/1"
 }
-
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
@@ -125,6 +124,35 @@ def parse_gpx_activities(gpx_file: str) -> list[Activity]:
     return activities
 
 
+def random_trace_color() -> str:
+    # Keep colors saturated and moderately dark for strong contrast on map tiles.
+    hue = random.random()
+    saturation = random.uniform(0.60, 0.90)
+    value = random.uniform(0.45, 0.72)
+
+    i = int(hue * 6.0)
+    f = hue * 6.0 - i
+    p = value * (1.0 - saturation)
+    q = value * (1.0 - f * saturation)
+    t = value * (1.0 - (1.0 - f) * saturation)
+    i %= 6
+
+    if i == 0:
+        r, g, b = value, t, p
+    elif i == 1:
+        r, g, b = q, value, p
+    elif i == 2:
+        r, g, b = p, value, t
+    elif i == 3:
+        r, g, b = p, q, value
+    elif i == 4:
+        r, g, b = t, p, value
+    else:
+        r, g, b = value, p, q
+
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+
+
 class GpxActivities(BasePlugin):
     def generate_image(self, settings, device_config):
         gpx_file = settings.get("gpxFile")
@@ -143,8 +171,27 @@ class GpxActivities(BasePlugin):
             raise RuntimeError("No valid tracks found in GPX file.")
 
         map_segments: list[list[list[float]]] = []
+        map_traces: list[dict] = []
+        rendered_activities = []
+
         for activity in activities:
+            color = random_trace_color()
             map_segments.extend(activity.segments)
+            map_traces.append(
+                {
+                    "color": color,
+                    "segments": activity.segments,
+                }
+            )
+            rendered_activities.append(
+                {
+                    "title": activity.title,
+                    "start": self._format_activity_start(activity.start_dt),
+                    "distance": f"{activity.distance_km:.1f} km",
+                    "point_count": activity.point_count,
+                    "color": color,
+                }
+            )
 
         if not map_segments:
             raise RuntimeError("No track points found in GPX file.")
@@ -155,17 +202,6 @@ class GpxActivities(BasePlugin):
         min_lon = min(point[1] for point in all_points)
         max_lon = max(point[1] for point in all_points)
 
-        rendered_activities = []
-        for activity in activities:
-            rendered_activities.append(
-                {
-                    "title": activity.title,
-                    "start": self._format_activity_start(activity.start_dt),
-                    "distance": f"{activity.distance_km:.1f} km",
-                    "point_count": activity.point_count,
-                }
-            )
-
         template_params = {
             "style_sheets": [
                 os.path.join(self.render_dir, "gpx_activities.css"),
@@ -173,7 +209,7 @@ class GpxActivities(BasePlugin):
             "font_faces": get_fonts(),
             "width": dimensions[0],
             "height": dimensions[1],
-            "map_segments": map_segments,
+            "map_traces": map_traces,
             "activities": rendered_activities,
             "bounds": {
                 "south": min_lat,

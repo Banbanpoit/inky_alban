@@ -29,7 +29,10 @@
             <ul>
                 {% for activity in activities %}
                 <li>
-                    <div class="activity-title">{{ activity.title }}</div>
+                    <div class="activity-title">
+                        <span class="trace-dot" style="background-color: {{ activity.color }};"></span>
+                        {{ activity.title }}
+                    </div>
                     <div class="activity-meta">{{ activity.start }}</div>
                     <div class="activity-meta">{{ activity.distance }} | {{ activity.point_count }} pts</div>
                 </li>
@@ -39,7 +42,7 @@
     </div>
 
     <script>
-        const mapSegments = {{ map_segments | tojson }};
+        const mapTraces = {{ map_traces | tojson }};
         const bounds = {{ bounds | tojson }};
 
         const map = L.map('map', {
@@ -52,16 +55,18 @@
             maxZoom: 19
         }).addTo(map);
 
-        mapSegments.forEach(segment => {
-            if (segment.length > 1) {
-                L.polyline(segment, {
-                    color: '#0b2e59',
-                    weight: 4,
-                    opacity: 0.95,
-                    lineCap: 'round',
-                    lineJoin: 'round'
-                }).addTo(map);
-            }
+        mapTraces.forEach(trace => {
+            trace.segments.forEach(segment => {
+                if (segment.length > 1) {
+                    L.polyline(segment, {
+                        color: trace.color,
+                        weight: 4,
+                        opacity: 0.95,
+                        lineCap: 'round',
+                        lineJoin: 'round'
+                    }).addTo(map);
+                }
+            });
         });
 
         const leafletBounds = L.latLngBounds(
