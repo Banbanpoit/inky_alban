@@ -1,96 +1,78 @@
-from src.plugins.gpx_activities.gpx_activities import parse_gpx_activities, parse_multiple_gpx_activities
+from src.plugins.gpx_activities.gpx_activities import (
+    GpxActivities,
+    decode_polyline,
+    extract_polyline_points,
+    extract_start_coordinates,
+    is_in_brussels,
+)
 
 
-def test_parse_gpx_activities_sorted_latest_first(tmp_path):
-    gpx_content = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>Morning Run</name>
-    <time>2026-02-10T06:00:00Z</time>
-    <trkseg>
-      <trkpt lat="48.8566" lon="2.3522"><time>2026-02-10T06:00:00Z</time></trkpt>
-      <trkpt lat="48.8570" lon="2.3530"><time>2026-02-10T06:10:00Z</time></trkpt>
-    </trkseg>
-  </trk>
-  <trk>
-    <name>Evening Ride</name>
-    <time>2026-02-11T18:00:00Z</time>
-    <trkseg>
-      <trkpt lat="48.8600" lon="2.3500"><time>2026-02-11T18:00:00Z</time></trkpt>
-      <trkpt lat="48.8615" lon="2.3490"><time>2026-02-11T18:20:00Z</time></trkpt>
-    </trkseg>
-  </trk>
-</gpx>
-"""
+def test_decode_polyline_basic():
+    # Encoded polyline for [(38.5,-120.2),(40.7,-120.95),(43.252,-126.453)]
+    encoded = "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+    points = decode_polyline(encoded)
 
-    gpx_file = tmp_path / "activities.gpx"
-    gpx_file.write_text(gpx_content)
-
-    activities = parse_gpx_activities(str(gpx_file))
-
-    assert len(activities) == 2
-    assert activities[0].title == "Evening Ride"
-    assert activities[1].title == "Morning Run"
-    assert activities[0].distance_km > 0
-    assert activities[1].distance_km > 0
+    assert len(points) == 3
+    assert abs(points[0][0] - 38.5) < 1e-5
+    assert abs(points[0][1] + 120.2) < 1e-5
 
 
-def test_parse_gpx_activities_uses_first_point_time_when_track_time_missing(tmp_path):
-    gpx_content = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>No Track Time</name>
-    <trkseg>
-      <trkpt lat="40.7128" lon="-74.0060"><time>2026-02-01T07:30:00Z</time></trkpt>
-      <trkpt lat="40.7138" lon="-74.0050"><time>2026-02-01T07:50:00Z</time></trkpt>
-    </trkseg>
-  </trk>
-</gpx>
-"""
+def test_extract_start_coordinates_from_activity_fields():
+    activity = {
+        "startLatitude": 50.85,
+        "startLongitude": 4.36,
+    }
+    lat, lon = extract_start_coordinates(activity)
 
-    gpx_file = tmp_path / "missing-track-time.gpx"
-    gpx_file.write_text(gpx_content)
-
-    activities = parse_gpx_activities(str(gpx_file))
-
-    assert len(activities) == 1
-    assert activities[0].start_dt is not None
-    assert activities[0].start_dt.isoformat() == "2026-02-01T07:30:00+00:00"
+    assert lat == 50.85
+    assert lon == 4.36
 
 
-def test_parse_multiple_gpx_activities_merged_and_sorted(tmp_path):
-    gpx_early = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>First File Run</name>
-    <time>2026-01-10T08:00:00Z</time>
-    <trkseg>
-      <trkpt lat="41.0" lon="-73.0"/>
-      <trkpt lat="41.001" lon="-73.001"/>
-    </trkseg>
-  </trk>
-</gpx>
-"""
-    gpx_late = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="pytest" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>Second File Ride</name>
-    <time>2026-01-11T08:00:00Z</time>
-    <trkseg>
-      <trkpt lat="42.0" lon="-72.0"/>
-      <trkpt lat="42.001" lon="-72.001"/>
-    </trkseg>
-  </trk>
-</gpx>
-"""
+def test_extract_start_coordinates_from_summarydto():
+    activity = {
+        "summaryDTO": {
+            "startLatitude": 50.84,
+            "startLongitude": 4.35,
+        }
+    }
+    lat, lon = extract_start_coordinates(activity)
 
-    file_early = tmp_path / "early.gpx"
-    file_late = tmp_path / "late.gpx"
-    file_early.write_text(gpx_early)
-    file_late.write_text(gpx_late)
+    assert lat == 50.84
+    assert lon == 4.35
 
-    activities = parse_multiple_gpx_activities([str(file_early), str(file_late)])
 
-    assert len(activities) == 2
-    assert activities[0].title == "Second File Ride"
-    assert activities[1].title == "First File Run"
+def test_is_in_brussels_bbox():
+    assert is_in_brussels(50.85, 4.36) is True
+    assert is_in_brussels(50.7, 4.36) is False
+
+
+def test_extract_polyline_points_from_nested_polyline_dto():
+    details = {
+        "geoPolylineDTO": {
+            "polyline": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+        }
+    }
+
+    points = extract_polyline_points(details)
+    assert len(points) == 3
+
+
+def test_parse_min_distance_default_and_validation():
+    assert GpxActivities._parse_min_distance(None) == 20.0
+    assert GpxActivities._parse_min_distance("") == 20.0
+    assert GpxActivities._parse_min_distance("15.5") == 15.5
+
+
+def test_parse_min_distance_negative_raises():
+    try:
+        GpxActivities._parse_min_distance("-1")
+    except RuntimeError as e:
+        assert "cannot be negative" in str(e)
+    else:
+        assert False, "Expected RuntimeError"
+
+
+def test_format_duration():
+    assert GpxActivities._format_duration(59) == "59s"
+    assert GpxActivities._format_duration(60) == "1m"
+    assert GpxActivities._format_duration(3661) == "1h 01m 01s"

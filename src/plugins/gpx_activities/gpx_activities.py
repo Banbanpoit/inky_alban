@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from math import asin, cos, radians, sin, sqrt
+from datetime import datetime, timedelta
 import logging
 import os
 import random
-import xml.etree.ElementTree as ET
+from typing import Any
 
 from plugins.base_plugin.base_plugin import BasePlugin
 from utils.app_utils import get_fonts, resolve_path
 from utils.image_utils import take_screenshot_html
 
 logger = logging.getLogger(__name__)
+
+# Brussels-Capital Region bounding box
+BRUSSELS_MIN_LAT = 50.796
+BRUSSELS_MAX_LAT = 50.914
+BRUSSELS_MIN_LON = 4.244
+BRUSSELS_MAX_LON = 4.486
 
 
 @dataclass
@@ -21,123 +26,7 @@ class Activity:
     start_dt: datetime | None
     distance_km: float
     duration_seconds: int | None
-    segments: list[list[list[float]]]
-
-
-GPX_NS = {
-    "gpx": "http://www.topografix.com/GPX/1/1"
-}
-
-def parse_iso_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-
-    normalized = value.strip()
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
-
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-
-    if dt.tzinfo is None:
-        # Treat naive timestamps as UTC for deterministic ordering.
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r = 6371.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    return 2 * r * asin(sqrt(a))
-
-
-def parse_gpx_activities(gpx_file: str) -> list[Activity]:
-    try:
-        tree = ET.parse(gpx_file)
-    except Exception as exc:
-        logger.exception("Failed to parse GPX file: %s", gpx_file)
-        raise RuntimeError("Invalid GPX file.") from exc
-
-    root = tree.getroot()
-    tracks = root.findall("gpx:trk", GPX_NS)
-    activities: list[Activity] = []
-
-    for index, trk in enumerate(tracks, start=1):
-        title = (trk.findtext("gpx:name", default="", namespaces=GPX_NS) or "").strip() or f"Activity {index}"
-        trk_time = parse_iso_datetime(trk.findtext("gpx:time", namespaces=GPX_NS))
-
-        segments: list[list[list[float]]] = []
-        first_point_time: datetime | None = None
-        last_point_time: datetime | None = None
-        total_distance_km = 0.0
-
-        for trkseg in trk.findall("gpx:trkseg", GPX_NS):
-            segment_points: list[list[float]] = []
-            prev_lat = None
-            prev_lon = None
-
-            for trkpt in trkseg.findall("gpx:trkpt", GPX_NS):
-                lat_attr = trkpt.attrib.get("lat")
-                lon_attr = trkpt.attrib.get("lon")
-                if lat_attr is None or lon_attr is None:
-                    continue
-
-                lat = float(lat_attr)
-                lon = float(lon_attr)
-                segment_points.append([lat, lon])
-
-                if prev_lat is not None and prev_lon is not None:
-                    total_distance_km += haversine_distance_km(prev_lat, prev_lon, lat, lon)
-                prev_lat, prev_lon = lat, lon
-
-                track_point_time = parse_iso_datetime(trkpt.findtext("gpx:time", namespaces=GPX_NS))
-                if track_point_time:
-                    if first_point_time is None or track_point_time < first_point_time:
-                        first_point_time = track_point_time
-                    if last_point_time is None or track_point_time > last_point_time:
-                        last_point_time = track_point_time
-
-            if segment_points:
-                segments.append(segment_points)
-
-        if not segments:
-            continue
-
-        start_dt = trk_time or first_point_time
-        duration_seconds = None
-        if first_point_time and last_point_time and last_point_time >= first_point_time:
-            duration_seconds = int((last_point_time - first_point_time).total_seconds())
-
-        activities.append(
-            Activity(
-                title=title,
-                start_dt=start_dt,
-                distance_km=total_distance_km,
-                duration_seconds=duration_seconds,
-                segments=segments,
-            )
-        )
-
-    def sort_key(activity: Activity) -> float:
-        if not activity.start_dt:
-            return float("-inf")
-        return activity.start_dt.timestamp()
-
-    activities.sort(key=sort_key, reverse=True)
-    return activities
-
-
-def parse_multiple_gpx_activities(gpx_files: list[str]) -> list[Activity]:
-    activities: list[Activity] = []
-    for gpx_file in gpx_files:
-        activities.extend(parse_gpx_activities(gpx_file))
-
-    activities.sort(key=lambda activity: activity.start_dt.timestamp() if activity.start_dt else float("-inf"), reverse=True)
-    return activities
+    points: list[list[float]]
 
 
 def random_trace_color() -> str:
@@ -169,37 +58,186 @@ def random_trace_color() -> str:
     return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
 
 
-class GpxActivities(BasePlugin):
-    def generate_image(self, settings, device_config):
-        gpx_files = self._normalize_gpx_files(settings)
-        if not gpx_files:
-            raise RuntimeError("At least one GPX file is required.")
+def parse_iso_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
 
-        for gpx_file in gpx_files:
-            if not os.path.isfile(gpx_file):
-                raise RuntimeError(f"Configured GPX file is missing: {os.path.basename(gpx_file)}")
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def decode_polyline(encoded: str) -> list[list[float]]:
+    """Decode Google encoded polyline to [lat, lon] pairs."""
+    if not encoded:
+        return []
+
+    points = []
+    lat = 0
+    lon = 0
+    index = 0
+
+    while index < len(encoded):
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlon = ~(result >> 1) if (result & 1) else (result >> 1)
+        lon += dlon
+
+        points.append([lat / 1e5, lon / 1e5])
+
+    return points
+
+
+def extract_start_coordinates(activity: dict[str, Any]) -> tuple[float | None, float | None]:
+    candidates = [
+        (activity.get("startLatitude"), activity.get("startLongitude")),
+        (activity.get("beginLatitude"), activity.get("beginLongitude")),
+        (activity.get("startLatitudeDegrees"), activity.get("startLongitudeDegrees")),
+    ]
+
+    summary = activity.get("summaryDTO") if isinstance(activity.get("summaryDTO"), dict) else {}
+    candidates.append((summary.get("startLatitude"), summary.get("startLongitude")))
+
+    for lat, lon in candidates:
+        try:
+            if lat is None or lon is None:
+                continue
+            return float(lat), float(lon)
+        except (TypeError, ValueError):
+            continue
+
+    return None, None
+
+
+def is_in_brussels(lat: float | None, lon: float | None) -> bool:
+    if lat is None or lon is None:
+        return False
+    return BRUSSELS_MIN_LAT <= lat <= BRUSSELS_MAX_LAT and BRUSSELS_MIN_LON <= lon <= BRUSSELS_MAX_LON
+
+
+def extract_polyline_points(details: dict[str, Any]) -> list[list[float]]:
+    if not isinstance(details, dict):
+        return []
+
+    for key in ["geoPolylineDTO", "polylineDTO"]:
+        value = details.get(key)
+        if isinstance(value, dict):
+            encoded = value.get("polyline") or value.get("encodedPolyline")
+            if encoded:
+                points = decode_polyline(encoded)
+                if points:
+                    return points
+
+    encoded = details.get("polyline") or details.get("encodedPolyline")
+    if isinstance(encoded, str) and encoded:
+        points = decode_polyline(encoded)
+        if points:
+            return points
+
+    # Fallback: chart data arrays if available.
+    metric_desc = details.get("metricDescriptors")
+    activity_detail_metrics = details.get("activityDetailMetrics")
+    if isinstance(metric_desc, list) and isinstance(activity_detail_metrics, list):
+        lat_idx = None
+        lon_idx = None
+        for idx, metric in enumerate(metric_desc):
+            if not isinstance(metric, dict):
+                continue
+            key = metric.get("metricsIndex") or metric.get("key") or metric.get("displayKey")
+            unit = str(metric.get("unit", "")).lower()
+            text = str(key).lower()
+            if lat_idx is None and ("latitude" in text or "lat" == text):
+                lat_idx = idx
+            if lon_idx is None and ("longitude" in text or "lon" == text or "lng" == text):
+                lon_idx = idx
+            if lat_idx is None and "degree" in unit and "lat" in text:
+                lat_idx = idx
+            if lon_idx is None and "degree" in unit and ("lon" in text or "lng" in text):
+                lon_idx = idx
+
+        if lat_idx is not None and lon_idx is not None:
+            points: list[list[float]] = []
+            for row in activity_detail_metrics:
+                if not isinstance(row, dict):
+                    continue
+                metrics = row.get("metrics")
+                if not isinstance(metrics, list):
+                    continue
+                if lat_idx >= len(metrics) or lon_idx >= len(metrics):
+                    continue
+                try:
+                    lat = float(metrics[lat_idx])
+                    lon = float(metrics[lon_idx])
+                    points.append([lat, lon])
+                except (TypeError, ValueError):
+                    continue
+            if points:
+                return points
+
+    return []
+
+
+class GpxActivities(BasePlugin):
+    def generate_settings_template(self):
+        template_params = super().generate_settings_template()
+        template_params["style_settings"] = False
+        return template_params
+
+    def generate_image(self, settings, device_config):
+        if settings.get("gpxFiles[]") or settings.get("gpxFile"):
+            raise RuntimeError("This plugin now uses Garmin Connect directly. Re-save the plugin instance with Garmin credentials.")
+
+        email_key = settings.get("garminEmailKey")
+        password_key = settings.get("garminPasswordKey")
+        if not email_key or not password_key:
+            raise RuntimeError("Garmin credentials are required. Save email and password in plugin settings.")
+
+        email = device_config.load_env_key(email_key)
+        password = device_config.load_env_key(password_key)
+        if not email or not password:
+            raise RuntimeError("Garmin credentials are missing from .env. Re-save credentials in plugin settings.")
+
+        min_distance_km = self._parse_min_distance(settings.get("minDistanceKm"))
+
+        activities = self._fetch_filtered_activities(email, password, min_distance_km)
+        if not activities:
+            raise RuntimeError("No matching road_biking activities found in Brussels for the last 6 months with current distance filter.")
 
         dimensions = device_config.get_resolution()
         if device_config.get_config("orientation") == "vertical":
             dimensions = dimensions[::-1]
 
-        activities = parse_multiple_gpx_activities(gpx_files)
-        if not activities:
-            raise RuntimeError("No valid tracks found in GPX files.")
-
-        map_segments: list[list[list[float]]] = []
-        map_traces: list[dict] = []
+        map_traces: list[dict[str, Any]] = []
         rendered_activities = []
 
         for activity in activities:
             color = random_trace_color()
-            map_segments.extend(activity.segments)
-            map_traces.append(
-                {
-                    "color": color,
-                    "segments": activity.segments,
-                }
-            )
+            if len(activity.points) > 1:
+                map_traces.append({"color": color, "segments": [activity.points]})
             rendered_activities.append(
                 {
                     "title": activity.title,
@@ -210,14 +248,16 @@ class GpxActivities(BasePlugin):
                 }
             )
 
-        if not map_segments:
-            raise RuntimeError("No track points found in GPX file.")
-
-        all_points = [point for segment in map_segments for point in segment]
-        min_lat = min(point[0] for point in all_points)
-        max_lat = max(point[0] for point in all_points)
-        min_lon = min(point[1] for point in all_points)
-        max_lon = max(point[1] for point in all_points)
+        points = [point for activity in activities for point in activity.points]
+        if points:
+            min_lat = min(point[0] for point in points)
+            max_lat = max(point[0] for point in points)
+            min_lon = min(point[1] for point in points)
+            max_lon = max(point[1] for point in points)
+        else:
+            # Fallback to Brussels bbox when no polyline data is available.
+            min_lat, max_lat = BRUSSELS_MIN_LAT, BRUSSELS_MAX_LAT
+            min_lon, max_lon = BRUSSELS_MIN_LON, BRUSSELS_MAX_LON
 
         template_params = {
             "style_sheets": [
@@ -239,21 +279,118 @@ class GpxActivities(BasePlugin):
 
         template = self.env.get_template("gpx_activities.html")
         rendered_html = template.render(template_params)
-        image = take_screenshot_html(rendered_html, dimensions, timeout_ms=15000)
+        image = take_screenshot_html(rendered_html, dimensions, timeout_ms=20000)
 
         if not image:
-            raise RuntimeError("Failed to render GPX map. Check Chromium availability and network access.")
+            raise RuntimeError("Failed to render Garmin map view. Check Chromium availability and network access.")
 
         return image
 
     def cleanup(self, settings):
-        for gpx_file in self._normalize_gpx_files(settings):
-            if gpx_file and os.path.exists(gpx_file):
+        # Credentials are persisted in .env and may be reused by other instances.
+        return
+
+    def _fetch_filtered_activities(self, email: str, password: str, min_distance_km: float) -> list[Activity]:
+        try:
+            from garminconnect import Garmin
+            from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
+        except Exception as exc:
+            raise RuntimeError("Missing dependency: garminconnect. Install requirements and restart.") from exc
+
+        end_date = datetime.now().date()
+        start_date = (datetime.now() - timedelta(days=183)).date()
+
+        try:
+            api = Garmin(email=email, password=password, return_on_mfa=True)
+            login_result = api.login()
+
+            if isinstance(login_result, tuple) and login_result and str(login_result[0]).lower() == "needs_mfa":
+                raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.")
+
+            raw_activities = api.get_activities_by_date(
+                startdate=start_date.isoformat(),
+                enddate=end_date.isoformat(),
+                activitytype="cycling",
+            )
+        except RuntimeError:
+            raise
+        except GarminConnectAuthenticationError as exc:
+            raise RuntimeError("Garmin authentication failed. Check credentials.") from exc
+        except GarminConnectTooManyRequestsError as exc:
+            raise RuntimeError("Garmin API rate limit reached. Please try again later.") from exc
+        except GarminConnectConnectionError as exc:
+            raise RuntimeError("Garmin connection failed. Please verify network connectivity.") from exc
+        except Exception as exc:
+            message = str(exc).lower()
+            if "mfa" in message or "challenge" in message or "needs_mfa" in message:
+                raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.") from exc
+            if "401" in message or "403" in message or "authentication" in message:
+                raise RuntimeError("Garmin authentication failed. Check credentials.") from exc
+            raise RuntimeError("Failed to fetch Garmin activities.") from exc
+
+        filtered: list[Activity] = []
+
+        for activity in raw_activities or []:
+            activity_type = (activity.get("activityType") or {}).get("typeKey")
+            if activity_type != "road_biking":
+                continue
+
+            lat, lon = extract_start_coordinates(activity)
+            if not is_in_brussels(lat, lon):
+                continue
+
+            distance_m = activity.get("distance") or 0
+            try:
+                distance_km = float(distance_m) / 1000.0
+            except (TypeError, ValueError):
+                continue
+            if distance_km < min_distance_km:
+                continue
+
+            activity_id = activity.get("activityId")
+            points: list[list[float]] = []
+            if activity_id:
                 try:
-                    os.remove(gpx_file)
-                    logger.info("Deleted GPX file: %s", gpx_file)
-                except Exception as exc:
-                    logger.warning("Failed to delete GPX file %s: %s", gpx_file, exc)
+                    details = api.get_activity_details(str(activity_id), maxpoly=4000)
+                    points = extract_polyline_points(details)
+                except Exception:
+                    logger.warning("Unable to fetch/parse route geometry for activity %s", activity_id)
+
+            title = activity.get("activityName") or f"Road Ride {activity_id}"
+            start_dt = parse_iso_datetime(activity.get("startTimeLocal") or activity.get("startTimeGMT"))
+
+            duration_seconds: int | None = None
+            try:
+                duration_value = activity.get("duration")
+                if duration_value is not None:
+                    duration_seconds = int(float(duration_value))
+            except (TypeError, ValueError):
+                duration_seconds = None
+
+            filtered.append(
+                Activity(
+                    title=title,
+                    start_dt=start_dt,
+                    distance_km=distance_km,
+                    duration_seconds=duration_seconds,
+                    points=points,
+                )
+            )
+
+        filtered.sort(key=lambda a: a.start_dt.timestamp() if a.start_dt else float("-inf"), reverse=True)
+        return filtered
+
+    @staticmethod
+    def _parse_min_distance(value: Any) -> float:
+        if value is None or value == "":
+            return 20.0
+        try:
+            distance = float(value)
+        except (TypeError, ValueError):
+            raise RuntimeError("Minimum distance must be a valid number in kilometers.")
+        if distance < 0:
+            raise RuntimeError("Minimum distance cannot be negative.")
+        return distance
 
     @staticmethod
     def _format_activity_start(start_dt: datetime | None) -> str:
@@ -282,17 +419,3 @@ class GpxActivities(BasePlugin):
         if seconds > 0:
             return f"{minutes}m {seconds:02d}s"
         return f"{minutes}m"
-
-    @staticmethod
-    def _normalize_gpx_files(settings) -> list[str]:
-        # Preferred key for multi-upload mode.
-        value = settings.get("gpxFiles[]")
-        if value is None:
-            # Backward compatibility with old single-file setting.
-            value = settings.get("gpxFile")
-
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [path for path in value if path]
-        return [value] if value else []

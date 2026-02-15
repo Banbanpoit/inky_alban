@@ -20,6 +20,10 @@ def add_plugin():
         plugin_settings = parse_form(request.form)
         refresh_settings = json.loads(plugin_settings.pop("refresh_settings"))
         plugin_id = plugin_settings.pop("plugin_id")
+        if plugin_id == "gpx_activities":
+            # Never persist plain Garmin credentials in playlist config.
+            plugin_settings.pop("garminEmail", None)
+            plugin_settings.pop("garminPassword", None)
 
         playlist = refresh_settings.get('playlist')
         instance_name = refresh_settings.get('instance_name')

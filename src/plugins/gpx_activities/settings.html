@@ -1,122 +1,115 @@
 <div class="form-group">
-    <label for="gpxUpload" class="form-input file-upload-label">Choose GPX File(s)</label>
-    <input
-        type="file"
-        id="gpxUpload"
-        name="gpxFiles[]"
-        accept=".gpx,application/gpx+xml,text/xml,application/xml"
-        class="file-upload-input"
-        multiple
-        onchange="addGpxFiles()"
-    >
-</div>
+    <div class="form-group nowrap">
+        <label for="garminEmail" class="form-label">Garmin Email:</label>
+        <input type="email" id="garminEmail" name="garminEmail" placeholder="name@example.com" class="form-input" autocomplete="username">
+    </div>
 
-<div class="form-group">
-    <div id="fileNames" class="file-name-list"></div>
-</div>
+    <div class="form-group nowrap">
+        <label for="garminPassword" class="form-label">Garmin Password:</label>
+        <input type="password" id="garminPassword" name="garminPassword" placeholder="Enter password" class="form-input" autocomplete="current-password">
+    </div>
 
-<div id="hiddenFileInputs"></div>
+    <div class="form-group nowrap">
+        <label for="minDistanceKm" class="form-label">Min Distance (km):</label>
+        <input type="number" id="minDistanceKm" name="minDistanceKm" min="0" step="0.1" value="20" class="form-input">
+    </div>
+
+    <input type="hidden" id="garminEmailKey" name="garminEmailKey">
+    <input type="hidden" id="garminPasswordKey" name="garminPasswordKey">
+</div>
 
 <div class="form-group">
     <span style="color: var(--text-primary);">
-        Upload one or more GPX files. Each &lt;trk&gt; entry is displayed as one activity, ordered by latest start time.
+        Displays Garmin road biking activities in Brussels from the last 6 months.
+        Credentials are stored securely in <code>.env</code> and not saved in playlist config.
     </span>
 </div>
 
 <script>
-    function ensureBucket() {
-        if (!uploadedFiles["gpxFiles[]"]) {
-            uploadedFiles["gpxFiles[]"] = [];
-        }
-    }
+    async function persistGarminSecrets() {
+        const emailInput = document.getElementById('garminEmail');
+        const passwordInput = document.getElementById('garminPassword');
+        const emailKeyInput = document.getElementById('garminEmailKey');
+        const passwordKeyInput = document.getElementById('garminPasswordKey');
 
-    function addDisplayedFile(fileName, key, filePath = "") {
-        const fileNamesDisplay = document.getElementById("fileNames");
+        const email = (emailInput.value || '').trim();
+        const password = (passwordInput.value || '').trim();
+        const currentEmailKey = (emailKeyInput.value || '').trim();
+        const currentPasswordKey = (passwordKeyInput.value || '').trim();
 
-        const fileElement = document.createElement("div");
-        fileElement.classList.add("file-name");
-        fileElement.id = `gpx-${key}`;
-        fileElement.innerHTML = `
-            <span id="fileNameText">${fileName}</span>
-            <button type="button" class="remove-btn" onclick="removeGpxFile('${key}')">X</button>
-        `;
-        fileNamesDisplay.appendChild(fileElement);
+        const hasExistingKeys = Boolean(currentEmailKey && currentPasswordKey);
+        const shouldSave = Boolean(email || password || !hasExistingKeys);
 
-        if (filePath) {
-            const hiddenInput = document.createElement("input");
-            hiddenInput.type = "hidden";
-            hiddenInput.name = "gpxFiles[]";
-            hiddenInput.value = filePath;
-            hiddenInput.id = `hidden-gpx-${key}`;
-            hiddenInput.setAttribute('delete-on-submit', '');
-            document.getElementById("hiddenFileInputs").appendChild(hiddenInput);
-        }
-    }
-
-    function addGpxFiles() {
-        ensureBucket();
-        const fileInput = document.getElementById("gpxUpload");
-        const files = Array.from(fileInput.files);
-        if (files.length === 0) {
+        if (!shouldSave) {
             return;
         }
 
-        files.forEach(file => {
-            const key = `new-${file.name}-${file.lastModified}-${file.size}`;
-            const existing = uploadedFiles["gpxFiles[]"].some(
-                existingFile =>
-                    existingFile.name === file.name &&
-                    existingFile.lastModified === file.lastModified &&
-                    existingFile.size === file.size
-            );
-            if (existing) {
-                return;
-            }
+        if (!email) {
+            throw new Error('Garmin email is required.');
+        }
+        if (!password && !hasExistingKeys) {
+            throw new Error('Garmin password is required.');
+        }
 
-            uploadedFiles["gpxFiles[]"].push(file);
-            addDisplayedFile(file.name, key);
+        const response = await fetch('{{ url_for("plugin.save_garmin_credentials") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                email,
+                password,
+                current_email_key: currentEmailKey,
+                current_password_key: currentPasswordKey
+            })
         });
-        fileInput.value = "";
-    }
 
-    function removeGpxFile(key) {
-        ensureBucket();
-        const fileElement = document.getElementById(`gpx-${key}`);
-        if (fileElement) {
-            fileElement.remove();
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to save Garmin credentials.');
         }
 
-        const hiddenInput = document.getElementById(`hidden-gpx-${key}`);
-        if (hiddenInput) {
-            hiddenInput.remove();
-        }
+        emailKeyInput.value = result.email_key;
+        passwordKeyInput.value = result.password_key;
+        passwordInput.value = '';
 
-        if (key.startsWith("new-")) {
-            const parts = key.split("-");
-            const size = Number(parts.pop());
-            const lastModified = Number(parts.pop());
-            const fileName = parts.slice(1).join("-");
-
-            uploadedFiles["gpxFiles[]"] = uploadedFiles["gpxFiles[]"].filter(
-                file =>
-                    !(file.name === fileName && file.lastModified === lastModified && file.size === size)
-            );
+        if (loadPluginSettings) {
+            emailInput.value = '';
+            emailInput.placeholder = 'Stored securely (enter to replace)';
         }
     }
+
+    // Wrap global action handler to persist secrets before submit.
+    const originalHandleAction = window.handleAction;
+    window.handleAction = async function(action) {
+        try {
+            await persistGarminSecrets();
+            return await originalHandleAction(action);
+        } catch (error) {
+            showResponseModal('failure', `Error! ${error.message || error}`);
+        }
+    };
 
     document.addEventListener('DOMContentLoaded', () => {
-        ensureBucket();
-        if (!loadPluginSettings) {
-            return;
+        const minDistanceInput = document.getElementById('minDistanceKm');
+        const emailInput = document.getElementById('garminEmail');
+        const passwordInput = document.getElementById('garminPassword');
+        const emailKeyInput = document.getElementById('garminEmailKey');
+        const passwordKeyInput = document.getElementById('garminPasswordKey');
+
+        if (loadPluginSettings) {
+            minDistanceInput.value = pluginSettings.minDistanceKm || '20';
+            emailKeyInput.value = pluginSettings.garminEmailKey || '';
+            passwordKeyInput.value = pluginSettings.garminPasswordKey || '';
+
+            if (pluginSettings.garminEmailKey) {
+                emailInput.placeholder = 'Stored securely (enter to replace)';
+            }
+            if (pluginSettings.garminPasswordKey) {
+                passwordInput.placeholder = 'Stored securely (enter to replace)';
+            }
+        } else {
+            minDistanceInput.value = '20';
         }
-
-        const existingPaths = pluginSettings["gpxFiles[]"] ||
-            (pluginSettings.gpxFile ? [pluginSettings.gpxFile] : []);
-
-        existingPaths.forEach((existingPath, index) => {
-            const existingFileName = existingPath.split('/').pop();
-            const key = `existing-${index}`;
-            addDisplayedFile(existingFileName, key, existingPath);
-        });
     });
 </script>
