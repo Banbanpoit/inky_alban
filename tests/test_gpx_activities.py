@@ -91,4 +91,9 @@ def test_parse_min_distance_negative_raises():
 def test_format_duration():
     assert GpxActivities._format_duration(59) == "59s"
     assert GpxActivities._format_duration(60) == "1m"
-    assert GpxActivities._format_duration(3661) == "1h 01m 01s"
+    assert GpxActivities._format_duration(3661) == "1h 01m"
+
+
+def test_format_elevation_gain():
+    assert GpxActivities._format_elevation_gain(512.4) == "512 m elev"
+    assert GpxActivities._format_elevation_gain(None) == "Unknown elev"

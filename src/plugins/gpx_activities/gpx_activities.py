@@ -27,6 +27,7 @@ class Activity:
     title: str
     start_dt: datetime | None
     distance_km: float
+    elevation_gain_m: float | None
     duration_seconds: int | None
     points: list[list[float]]
 
@@ -272,6 +273,7 @@ class GpxActivities(BasePlugin):
                     "title": activity.title,
                     "start": self._format_activity_start(activity.start_dt),
                     "distance": f"{activity.distance_km:.1f} km",
+                    "elevation_gain": self._format_elevation_gain(activity.elevation_gain_m),
                     "duration": self._format_duration(activity.duration_seconds),
                     "color": color,
                 }
@@ -407,11 +409,20 @@ class GpxActivities(BasePlugin):
             except (TypeError, ValueError):
                 duration_seconds = None
 
+            elevation_gain_m: float | None = None
+            try:
+                elevation_value = activity.get("elevationGain")
+                if elevation_value is not None:
+                    elevation_gain_m = float(elevation_value)
+            except (TypeError, ValueError):
+                elevation_gain_m = None
+
             filtered.append(
                 Activity(
                     title=title,
                     start_dt=start_dt,
                     distance_km=distance_km,
+                    elevation_gain_m=elevation_gain_m,
                     duration_seconds=duration_seconds,
                     points=points,
                 )
@@ -449,13 +460,14 @@ class GpxActivities(BasePlugin):
             return f"{duration_seconds}s"
 
         hours, remainder = divmod(duration_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
+        minutes, _seconds = divmod(remainder, 60)
 
         if hours > 0:
-            if seconds > 0:
-                return f"{hours}h {minutes:02d}m {seconds:02d}s"
             return f"{hours}h {minutes:02d}m"
-
-        if seconds > 0:
-            return f"{minutes}m {seconds:02d}s"
         return f"{minutes}m"
+
+    @staticmethod
+    def _format_elevation_gain(elevation_gain_m: float | None) -> str:
+        if elevation_gain_m is None:
+            return "Unknown elev"
+        return f"{round(elevation_gain_m)} m elev"
