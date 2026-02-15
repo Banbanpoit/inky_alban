@@ -6,6 +6,7 @@ import logging
 import os
 import random
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from plugins.base_plugin.base_plugin import BasePlugin
 from utils.app_utils import get_fonts, resolve_path
@@ -18,6 +19,7 @@ BRUSSELS_MIN_LAT = 50.796
 BRUSSELS_MAX_LAT = 50.914
 BRUSSELS_MIN_LON = 4.244
 BRUSSELS_MAX_LON = 4.486
+GPX_NS = {"gpx": "http://www.topografix.com/GPX/1/1"}
 
 
 @dataclass
@@ -201,6 +203,33 @@ def extract_polyline_points(details: dict[str, Any]) -> list[list[float]]:
     return []
 
 
+def extract_points_from_gpx_bytes(gpx_data: bytes) -> list[list[float]]:
+    if not gpx_data:
+        return []
+
+    try:
+        root = ET.fromstring(gpx_data)
+    except ET.ParseError:
+        return []
+
+    points: list[list[float]] = []
+    trkpts = root.findall(".//gpx:trkpt", GPX_NS)
+    if not trkpts:
+        # Fallback for non-namespaced GPX exports.
+        trkpts = root.findall(".//trkpt")
+
+    for trkpt in trkpts:
+        lat_attr = trkpt.attrib.get("lat")
+        lon_attr = trkpt.attrib.get("lon")
+        if lat_attr is None or lon_attr is None:
+            continue
+        try:
+            points.append([float(lat_attr), float(lon_attr)])
+        except (TypeError, ValueError):
+            continue
+    return points
+
+
 class GpxActivities(BasePlugin):
     def generate_settings_template(self):
         template_params = super().generate_settings_template()
@@ -351,10 +380,21 @@ class GpxActivities(BasePlugin):
             points: list[list[float]] = []
             if activity_id:
                 try:
-                    details = api.get_activity_details(str(activity_id), maxpoly=4000)
-                    points = extract_polyline_points(details)
+                    # Prefer GPX export to maximize chance of getting full trace geometry.
+                    gpx_bytes = api.download_activity(
+                        str(activity_id),
+                        dl_fmt=Garmin.ActivityDownloadFormat.GPX,
+                    )
+                    points = extract_points_from_gpx_bytes(gpx_bytes)
                 except Exception:
-                    logger.warning("Unable to fetch/parse route geometry for activity %s", activity_id)
+                    logger.warning("Unable to download/parse GPX trace for activity %s, trying details endpoint", activity_id)
+
+                if not points:
+                    try:
+                        details = api.get_activity_details(str(activity_id), maxpoly=4000)
+                        points = extract_polyline_points(details)
+                    except Exception:
+                        logger.warning("Unable to fetch/parse route geometry from details for activity %s", activity_id)
 
             title = activity.get("activityName") or f"Road Ride {activity_id}"
             start_dt = parse_iso_datetime(activity.get("startTimeLocal") or activity.get("startTimeGMT"))
