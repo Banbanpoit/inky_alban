@@ -73,7 +73,7 @@ class RefreshTask:
         while True:
             try:
                 with self.condition:
-                    sleep_time = self.device_config.get_config("plugin_cycle_interval_seconds", default=60*60)
+                    sleep_time = self._get_plugin_cycle_interval_seconds()
 
                     # Wait for sleep_time or until notified
                     self.condition.wait(timeout=sleep_time)
@@ -174,7 +174,7 @@ class RefreshTask:
             return None, None
 
         latest_refresh_dt = latest_refresh_info.get_refresh_datetime()
-        plugin_cycle_interval = self.device_config.get_config("plugin_cycle_interval_seconds", default=3600)
+        plugin_cycle_interval = self._get_plugin_cycle_interval_seconds()
         should_refresh = PlaylistManager.should_refresh(latest_refresh_dt, plugin_cycle_interval, current_dt)
 
         if not should_refresh:
@@ -186,6 +186,20 @@ class RefreshTask:
         logger.info(f"Determined next plugin. | active_playlist: {playlist.name} | plugin_instance: {plugin.name}")
 
         return playlist, plugin
+
+    def _get_plugin_cycle_interval_seconds(self):
+        """Returns plugin cycle interval with backward compatibility for legacy config keys."""
+        interval = self.device_config.get_config("plugin_cycle_interval_seconds", default=None)
+        if interval is None:
+            # Legacy key used in older configs.
+            interval = self.device_config.get_config("scheduler_sleep_time", default=60*60)
+        try:
+            interval = int(interval)
+        except (TypeError, ValueError):
+            interval = 60*60
+        if interval <= 0:
+            interval = 60*60
+        return interval
     
     def log_system_stats(self):
         metrics = {
