@@ -93,8 +93,8 @@ class PlaylistManager:
         """Determine the active playlist based on the current time."""
         current_time = current_datetime.strftime("%H:%M")  # Get current time in "HH:MM" format
 
-        # get active playlists that have plugins
-        active_playlists = [p for p in self.playlists if p.is_active(current_time)]
+        # get active playlists that are enabled
+        active_playlists = [p for p in self.playlists if p.enabled and p.is_active(current_time)]
         if not active_playlists:
             return None
 
@@ -119,22 +119,24 @@ class PlaylistManager:
             logger.warning(f"Playlist '{playlist_name}' not found.")
         return False
 
-    def add_playlist(self, name, start_time=None, end_time=None):
+    def add_playlist(self, name, start_time=None, end_time=None, enabled=True):
         """Creates and adds a new playlist with the given start and end times."""
         if not start_time:
             start_time = PlaylistManager.DEFAULT_PLAYLIST_START
         if not end_time:
             end_time = PlaylistManager.DEFAULT_PLAYLIST_END
-        self.playlists.append(Playlist(name, start_time, end_time))
+        self.playlists.append(Playlist(name, start_time, end_time, enabled=enabled))
         return True
 
-    def update_playlist(self, old_name, new_name, start_time, end_time):
+    def update_playlist(self, old_name, new_name, start_time, end_time, enabled=None):
         """Updates an existing playlist's name, start time, and end time."""
         playlist = self.get_playlist(old_name)
         if playlist:
             playlist.name = new_name
             playlist.start_time = start_time
             playlist.end_time = end_time
+            if enabled is not None:
+                playlist.enabled = enabled
             return True
         logger.warning(f"Playlist '{old_name}' not found.")
         return False
@@ -175,12 +177,13 @@ class Playlist:
         current_plugin_index (int): Index of the currently active plugin in the playlist.
     """
 
-    def __init__(self, name, start_time, end_time, plugins=None, current_plugin_index=None):
+    def __init__(self, name, start_time, end_time, plugins=None, current_plugin_index=None, enabled=True):
         self.name = name
         self.start_time = start_time
         self.end_time = end_time
         self.plugins = [PluginInstance.from_dict(p) for p in (plugins or [])]
         self.current_plugin_index = current_plugin_index
+        self.enabled = enabled
 
     def is_active(self, current_time):
         """Check if the playlist is active at the given time."""
@@ -256,6 +259,7 @@ class Playlist:
             "name": self.name,
             "start_time": self.start_time,
             "end_time": self.end_time,
+            "enabled": self.enabled,
             "plugins": [p.to_dict() for p in self.plugins],
             "current_plugin_index": self.current_plugin_index
         }
@@ -267,7 +271,8 @@ class Playlist:
             start_time=data["start_time"],
             end_time=data["end_time"],
             plugins=data["plugins"],
-            current_plugin_index=data.get("current_plugin_index", None)
+            current_plugin_index=data.get("current_plugin_index", None),
+            enabled=data.get("enabled", True)
         )
 
 class PluginInstance:

@@ -1,6 +1,7 @@
 import pytest
+from datetime import datetime
 
-from src.model import Playlist
+from src.model import Playlist, PlaylistManager
 
 class TestPlaylist:
 
@@ -49,4 +50,38 @@ class TestPlaylist:
         playlist = Playlist("Test Playlist", start, end)
         assert playlist.is_active(current) == expected
         assert playlist.get_priority() == priority
+
+
+def test_playlist_from_dict_defaults_enabled_true():
+    playlist = Playlist.from_dict({
+        "name": "Default",
+        "start_time": "00:00",
+        "end_time": "24:00",
+        "plugins": []
+    })
+    assert playlist.enabled is True
+
+
+def test_playlist_to_dict_includes_enabled():
+    playlist = Playlist("Test", "00:00", "24:00", enabled=False)
+    assert playlist.to_dict()["enabled"] is False
+
+
+def test_determine_active_playlist_ignores_disabled():
+    manager = PlaylistManager(playlists=[
+        Playlist("Disabled", "00:00", "24:00", enabled=False),
+        Playlist("Enabled", "00:00", "24:00", enabled=True),
+    ])
+    result = manager.determine_active_playlist(datetime(2026, 1, 1, 10, 0))
+    assert result is not None
+    assert result.name == "Enabled"
+
+
+def test_determine_active_playlist_returns_none_when_all_matching_disabled():
+    manager = PlaylistManager(playlists=[
+        Playlist("Disabled A", "00:00", "24:00", enabled=False),
+        Playlist("Disabled B", "09:00", "11:00", enabled=False),
+    ])
+    result = manager.determine_active_playlist(datetime(2026, 1, 1, 10, 0))
+    assert result is None
         

@@ -122,6 +122,7 @@ def create_playlist():
 @playlist_bp.route('/update_playlist/<string:playlist_name>', methods=['PUT'])
 def update_playlist(playlist_name):
     device_config = current_app.config['DEVICE_CONFIG']
+    refresh_task = current_app.config.get('REFRESH_TASK')
     playlist_manager = device_config.get_playlist_manager()
 
     data = request.get_json()
@@ -129,19 +130,51 @@ def update_playlist(playlist_name):
     new_name = data.get("new_name")
     start_time = data.get("start_time")
     end_time = data.get("end_time")
+    enabled = data.get("enabled")
     if not new_name or not start_time or not end_time:
         return jsonify({"success": False, "error": "Missing required fields"}), 400
+    if enabled is not None and not isinstance(enabled, bool):
+        return jsonify({"success": False, "error": "Field 'enabled' must be a boolean"}), 400
 
     playlist = playlist_manager.get_playlist(playlist_name)
     if not playlist:
         return jsonify({"error": f"Playlist '{playlist_name}' does not exist"}), 400
 
-    result = playlist_manager.update_playlist(playlist_name, new_name, start_time, end_time)
+    result = playlist_manager.update_playlist(playlist_name, new_name, start_time, end_time, enabled=enabled)
     if not result:
         return jsonify({"error": "Failed to delete playlist"}), 500
     device_config.write_config()
+    if refresh_task:
+        refresh_task.signal_config_change()
 
     return jsonify({"success": True, "message": f"Updated playlist '{playlist_name}'!"})
+
+@playlist_bp.route('/toggle_playlist/<string:playlist_name>', methods=['PUT'])
+def toggle_playlist(playlist_name):
+    device_config = current_app.config['DEVICE_CONFIG']
+    refresh_task = current_app.config.get('REFRESH_TASK')
+    playlist_manager = device_config.get_playlist_manager()
+
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "Field 'enabled' is required and must be a boolean"}), 400
+
+    playlist = playlist_manager.get_playlist(playlist_name)
+    if not playlist:
+        return jsonify({"error": f"Playlist '{playlist_name}' does not exist"}), 400
+
+    playlist.enabled = enabled
+    device_config.write_config()
+    if refresh_task:
+        refresh_task.signal_config_change()
+
+    status_text = "enabled" if enabled else "disabled"
+    return jsonify({
+        "success": True,
+        "message": f"Playlist '{playlist_name}' {status_text}.",
+        "enabled": enabled
+    })
 
 @playlist_bp.route('/delete_playlist/<string:playlist_name>', methods=['DELETE'])
 def delete_playlist(playlist_name):
