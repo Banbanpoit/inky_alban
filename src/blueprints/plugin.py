@@ -2,47 +2,12 @@ from flask import Blueprint, request, jsonify, current_app, render_template, sen
 from plugins.plugin_registry import get_plugin_instance
 from utils.app_utils import resolve_path, handle_request_files, parse_form
 from refresh_task import ManualRefresh, PlaylistRefresh
-from dotenv import dotenv_values
-import hashlib
 import json
 import os
 import logging
 
 logger = logging.getLogger(__name__)
 plugin_bp = Blueprint("plugin", __name__)
-
-
-def _get_env_path():
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    return os.path.join(base_dir, '.env')
-
-
-def _parse_env_file(filepath):
-    if not os.path.exists(filepath):
-        return []
-    try:
-        env_dict = dotenv_values(filepath)
-        return list(env_dict.items())
-    except Exception as e:
-        logger.error(f"Error parsing .env file: {e}")
-        return []
-
-
-def _write_env_file(filepath, entries):
-    try:
-        with open(filepath, 'w') as f:
-            f.write("# InkyPi API Keys and Secrets\n")
-            f.write("# Managed via web interface\n\n")
-            for key, value in entries:
-                if value is None:
-                    value = ""
-                if ' ' in value or '"' in value or "'" in value:
-                    value = f'"{value}"'
-                f.write(f"{key}={value}\n")
-        return True
-    except Exception as e:
-        logger.error(f"Error writing .env file: {e}")
-        return False
 
 def _delete_plugin_instance_images(device_config, plugin_instance_obj):
     """Delete all images associated with a plugin instance."""
@@ -298,52 +263,3 @@ def update_now():
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
     return jsonify({"success": True, "message": "Display updated"}), 200
-
-
-@plugin_bp.route('/plugin/gpx_activities/save_credentials', methods=['POST'])
-def save_garmin_credentials():
-    data = request.get_json() or {}
-
-    email = (data.get("email") or "").strip()
-    password = (data.get("password") or "").strip()
-    current_email_key = (data.get("current_email_key") or "").strip()
-    current_password_key = (data.get("current_password_key") or "").strip()
-
-    if not email:
-        return jsonify({"error": "Garmin email is required."}), 400
-    if not password and not (current_email_key and current_password_key):
-        return jsonify({"error": "Garmin password is required."}), 400
-
-    email_hash = hashlib.sha1(email.lower().encode("utf-8")).hexdigest()[:10]
-    email_key = f"GARMIN_EMAIL_{email_hash}"
-    password_key = f"GARMIN_PASSWORD_{email_hash}"
-
-    env_path = _get_env_path()
-    env_entries = _parse_env_file(env_path)
-    env_map = {k: v for k, v in env_entries if k}
-
-    env_map[email_key] = email
-    if password:
-        env_map[password_key] = password
-    elif current_password_key and current_password_key in env_map and current_password_key == password_key:
-        password_key = current_password_key
-    else:
-        return jsonify({"error": "Garmin password is required."}), 400
-
-    # Keep .env tidy by removing old keys for this plugin instance if they changed.
-    old_keys = {current_email_key, current_password_key} - {email_key, password_key, ""}
-    for key in old_keys:
-        env_map.pop(key, None)
-
-    ordered_entries = sorted(env_map.items(), key=lambda item: item[0])
-    if not _write_env_file(env_path, ordered_entries):
-        return jsonify({"error": "Failed to save Garmin credentials."}), 500
-
-    os.environ[email_key] = env_map[email_key]
-    os.environ[password_key] = env_map[password_key]
-
-    return jsonify({
-        "success": True,
-        "email_key": email_key,
-        "password_key": password_key
-    }), 200

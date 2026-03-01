@@ -232,6 +232,9 @@ def extract_points_from_gpx_bytes(gpx_data: bytes) -> list[list[float]]:
 
 
 class GpxActivities(BasePlugin):
+    GARMIN_EMAIL_ENV_KEY = "GARMIN_EMAIL"
+    GARMIN_PASSWORD_ENV_KEY = "GARMIN_PASSWORD"
+
     def generate_settings_template(self):
         template_params = super().generate_settings_template()
         template_params["style_settings"] = False
@@ -241,15 +244,13 @@ class GpxActivities(BasePlugin):
         if settings.get("gpxFiles[]") or settings.get("gpxFile"):
             raise RuntimeError("This plugin now uses Garmin Connect directly. Re-save the plugin instance with Garmin credentials.")
 
-        email_key = settings.get("garminEmailKey")
-        password_key = settings.get("garminPasswordKey")
-        if not email_key or not password_key:
-            raise RuntimeError("Garmin credentials are required. Save email and password in plugin settings.")
-
-        email = device_config.load_env_key(email_key)
-        password = device_config.load_env_key(password_key)
+        email = device_config.load_env_key(self.GARMIN_EMAIL_ENV_KEY)
+        password = device_config.load_env_key(self.GARMIN_PASSWORD_ENV_KEY)
         if not email or not password:
-            raise RuntimeError("Garmin credentials are missing from .env. Re-save credentials in plugin settings.")
+            raise RuntimeError(
+                "Garmin credentials are missing from API Keys. "
+                "Set GARMIN_EMAIL and GARMIN_PASSWORD in API Keys."
+            )
 
         min_distance_km = self._parse_min_distance(settings.get("minDistanceKm"))
 
