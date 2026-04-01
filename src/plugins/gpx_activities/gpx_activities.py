@@ -332,12 +332,26 @@ class GpxActivities(BasePlugin):
         end_date = datetime.now().date()
         start_date = (datetime.now() - timedelta(days=183)).date()
 
+        token_dir = os.path.join(os.path.expanduser("~"), ".garminconnect")
+        token_age_days = None
+        if os.path.isdir(token_dir):
+            try:
+                token_age_days = (datetime.now().timestamp() - os.path.getmtime(token_dir)) / 86400
+            except OSError:
+                pass
+
+        use_cached = token_age_days is not None and token_age_days < 30
+
         try:
             api = Garmin(email=email, password=password, return_on_mfa=True)
-            login_result = api.login()
 
-            if isinstance(login_result, tuple) and login_result and str(login_result[0]).lower() == "needs_mfa":
-                raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.")
+            if use_cached:
+                api.login(token_dir)
+            else:
+                login_result = api.login()
+                if isinstance(login_result, tuple) and login_result and str(login_result[0]).lower() == "needs_mfa":
+                    raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.")
+                api.garth.dump(token_dir)
 
             raw_activities = api.get_activities_by_date(
                 startdate=start_date.isoformat(),
@@ -351,6 +365,8 @@ class GpxActivities(BasePlugin):
         except GarminConnectTooManyRequestsError as exc:
             raise RuntimeError("Garmin API rate limit reached. Please try again later.") from exc
         except GarminConnectConnectionError as exc:
+            if "429" in str(exc) or "too many requests" in str(exc).lower():
+                raise RuntimeError("Garmin API rate limit reached (429). Please try again later.") from exc
             raise RuntimeError("Garmin connection failed. Please verify network connectivity.") from exc
         except Exception as exc:
             message = str(exc).lower()
