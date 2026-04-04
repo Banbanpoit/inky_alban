@@ -346,16 +346,13 @@ class GpxActivities(BasePlugin):
                     has_cached_token = False
 
             if not has_cached_token:
-                # Override garth's mobile User-Agent which is blocked by
-                # Garmin's Cloudflare protection since garth was deprecated.
-                # See https://github.com/matin/garth/discussions/222
-                api.garth.sess.headers.update({
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
-                })
                 login_result = api.login()
                 if isinstance(login_result, tuple) and login_result and str(login_result[0]).lower() == "needs_mfa":
                     raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.")
-                api.garth.dump(token_dir)
+                # Persist tokens — attribute name depends on garminconnect version
+                dumper = getattr(api, "client", None) or getattr(api, "garth", None)
+                if dumper:
+                    dumper.dump(token_dir)
 
             raw_activities = api.get_activities_by_date(
                 startdate=start_date.isoformat(),
