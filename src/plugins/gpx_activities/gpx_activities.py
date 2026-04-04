@@ -333,21 +333,25 @@ class GpxActivities(BasePlugin):
         start_date = (datetime.now() - timedelta(days=183)).date()
 
         token_dir = os.path.join(os.path.expanduser("~"), ".garminconnect")
-        token_age_days = None
-        if os.path.isdir(token_dir):
-            try:
-                token_age_days = (datetime.now().timestamp() - os.path.getmtime(token_dir)) / 86400
-            except OSError:
-                pass
-
-        use_cached = token_age_days is not None and token_age_days < 30
+        has_cached_token = os.path.isdir(token_dir)
 
         try:
             api = Garmin(email=email, password=password, return_on_mfa=True)
 
-            if use_cached:
-                api.login(token_dir)
-            else:
+            if has_cached_token:
+                try:
+                    api.login(token_dir)
+                except Exception:
+                    logger.info("Cached Garmin token expired or invalid, performing fresh login")
+                    has_cached_token = False
+
+            if not has_cached_token:
+                # Override garth's mobile User-Agent which is blocked by
+                # Garmin's Cloudflare protection since garth was deprecated.
+                # See https://github.com/matin/garth/discussions/222
+                api.garth.sess.headers.update({
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+                })
                 login_result = api.login()
                 if isinstance(login_result, tuple) and login_result and str(login_result[0]).lower() == "needs_mfa":
                     raise RuntimeError("Garmin account requires MFA/challenge. This plugin currently supports non-interactive login only.")
