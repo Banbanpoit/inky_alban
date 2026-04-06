@@ -338,6 +338,14 @@ class GpxActivities(BasePlugin):
         try:
             api = Garmin(email=email, password=password, return_on_mfa=True)
 
+            # Workaround for Garmin's Cloudflare TLS fingerprinting blocking
+            # garth's default mobile User-Agent (see garth#222).
+            garth_client = getattr(api, "garth", None) or getattr(api, "client", None)
+            if garth_client and hasattr(garth_client, "sess"):
+                garth_client.sess.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                })
+
             if has_cached_token:
                 try:
                     api.login(token_dir)
